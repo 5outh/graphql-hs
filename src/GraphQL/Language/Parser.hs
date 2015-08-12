@@ -1,7 +1,7 @@
 module GraphQL.Language.Parser where
 
-import           Control.Applicative           hiding (many, (<|>))
-import           Text.ParserCombinators.Parsec
+import           Control.Applicative hiding (many, (<|>))
+import           Text.Parsec
 
 data Token =
     T_Punctuator
@@ -26,19 +26,24 @@ data Punctuator =
   | P_ClosedBracket
     deriving (Show, Eq)
 
+data Document =
+    D_OperatorDefinition
+  | D_FragmentDefinition
+    deriving (Show, Eq)
+
 type Name = String
 
 -- TODO: Line/Paragraph Separators
-lineTerminator :: Parser Char
+lineTerminator :: Parsec String () Char
 lineTerminator = oneOf "\r\n"
 
-comma :: Parser Char
+comma :: Parsec String () Char
 comma = char ','
 
-comment :: Parser String
+comment :: Parsec String () String
 comment = char '#' *> many (noneOf "\r\n")
 
-punctuator :: Parser Punctuator
+punctuator :: Parsec String () Punctuator
 punctuator = foldr1 (<|>) $ map (uncurry bind) bindings
   where bind s p = string s *> pure p
         bindings =
@@ -54,7 +59,15 @@ punctuator = foldr1 (<|>) $ map (uncurry bind) bindings
           , ("}", P_ClosedBracket)
           ]
 
-name :: Parser Name
+name :: Parsec String () Name
 name = do { h <- oneOf alpha; t <- many (oneOf alphaNumeric); return (h:t); }
   where alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
         alphaNumeric = alpha ++ ['0'..'9']
+
+intValue :: Parsec String () Int
+intValue = do
+  neg <- optionMaybe (char '-')
+  i <- many1 digit
+  pure $ case neg of
+    Nothing -> read i
+    Just _ -> negate $ read i
