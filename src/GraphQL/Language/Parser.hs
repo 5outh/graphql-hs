@@ -71,3 +71,15 @@ intValue = do
   pure $ case neg of
     Nothing -> read i
     Just _ -> negate $ read i
+
+with p s = do
+  v <- p
+  w <- s
+  pure $ v:w
+
+floatValue = undefined
+  where integerPart = intValue
+        exponentIndicator :: Parsec String () Char
+        exponentIndicator = oneOf "eE"
+        fractionalPart :: Parsec String () String
+        fractionalPart = char '.' `with` many1 digit
