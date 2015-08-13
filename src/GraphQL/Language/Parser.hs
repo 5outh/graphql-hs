@@ -1,9 +1,13 @@
+{-#OPTIONS_GHC -fno-warn-unused-do-bind #-}
 module GraphQL.Language.Parser where
 
 import           Control.Applicative hiding (many, (<|>))
 import           Data.Monoid
 import           Text.Parsec
 import           Text.Parsec.String
+
+-- | Alias for NamedType
+newtype TypeCondition = TypeCondition Name
 
 data Token =
     T_Punctuator
@@ -94,23 +98,36 @@ name = oneOf alpha `with` many (oneOf alphaNumeric)
   where alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
         alphaNumeric = alpha ++ ['0'..'9']
 
-intValue :: Parser Int
-intValue = read <$> withMaybe (char '-') (many1 digit) (:)
+-- TODO: Variable
+data GraphQLValue =
+    -- V_Variable Variable
+    V_IntValue Int
+  | V_FloatValue Float
+  | V_BoolValue Bool
+  | V_StringValue StringValue
+  | V_EnumValue EnumValue
+    deriving (Show, Eq)
 
-floatValue :: Parser Float
-floatValue = read <$> options
+intValue :: Parser GraphQLValue
+intValue = V_IntValue <$> (read <$> withMaybe (char '-') (many1 digit) (:))
+
+floatValue :: Parser GraphQLValue
+floatValue = V_FloatValue <$> (read <$> options
   [ try (integerPart `withMonoid` exponentPart)
   , try (integerPart `withMonoid` fractionalPart `withMonoid` exponentPart)
   , integerPart `withMonoid` fractionalPart
-  ]
+  ])
   where integerPart = withMaybe (char '-') (many1 digit) (:)
         exponentIndicator = oneOf "eE"
         sign = oneOf "+-"
         fractionalPart = char '.' `with` many1 digit
         exponentPart = exponentIndicator `with` withMaybe sign integerPart (:)
 
-boolValue :: Parser Bool
-boolValue = options [string "true" *> pure True, string "false" *> pure False]
+boolValue :: Parser GraphQLValue
+boolValue = V_BoolValue <$> options
+  [ string "true" *> pure True
+  , string "false" *> pure False
+  ]
 
 data CharValue =
     CV_Char Char
@@ -126,9 +143,10 @@ condense (CV_EscapedUnicode str:xs) = '\\':str ++ condense xs
 condense [] = []
 
 type StringValue = [CharValue]
+type EnumValue = String
 
-stringValue :: Parser StringValue
-stringValue = char '"' *> many stringCharacter <* char '"'
+stringValue :: Parser GraphQLValue
+stringValue = V_StringValue <$> between (char '"') (char '"') (many stringCharacter)
   where stringCharacter = try escapedUnicode
                       <|> try escapedCharacter
                       <|> CV_Char <$> noneOf "\"\\\n\r"
@@ -138,8 +156,18 @@ stringValue = char '"' *> many stringCharacter <* char '"'
         escapedCharacter = CV_EscapedChar <$> (char '\\' *> oneOf "\\/bfnrt")
 
 -- | Parse an EnumValue
-enumValue :: Parser String
-enumValue = notStrings ["null", "false", "true"] *> name
+enumValue :: Parser GraphQLValue
+enumValue = V_EnumValue <$> (notStrings ["null", "false", "true"] *> name)
+
+-- | TODO: Refine/test
+value :: Parser GraphQLValue
+value = options
+  [ try intValue
+  , try floatValue
+  , try boolValue
+  , try stringValue
+  , enumValue
+  ]
 
 -- | Parse a Variable
 variable :: Parser String
@@ -152,14 +180,27 @@ data GraphQLType = NamedType Name
                  | NonNullType GraphQLType
                   deriving (Show, Eq)
 
+-- | Parse a type
 type_ :: Parser GraphQLType
 type_ = try nonNullType <|> try listType <|> namedType
+  where namedType = NamedType <$> name
+        listType = ListType <$> between (char '[') (char ']') type_
+        nonNullType = NonNullType <$> (options [listType, namedType] <* char '!')
 
-namedType ::Parser GraphQLType
-namedType = NamedType <$> name
+-- | Parse a TypeCondition
+typeCondition :: Parser TypeCondition
+typeCondition = TypeCondition <$> name
 
-listType :: Parser GraphQLType
-listType = ListType <$> between (char '[') (char ']') type_
+data Argument = Argument Name GraphQLValue
+  deriving (Show, Eq)
 
-nonNullType :: Parser GraphQLType
-nonNullType = NonNullType <$> (options [listType, namedType] <* char '!')
+arguments :: Parser [Argument]
+arguments = between (char '(') (char ')') (many1 argument)
+
+-- | TODO: whitespace insensitivity
+argument :: Parser Argument
+argument = do
+  n <- name
+  char ':'
+  v <- value
+  pure $ Argument n v
